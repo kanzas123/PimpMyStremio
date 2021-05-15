@@ -4,15 +4,27 @@ body {
 }
 #header {
 	margin-top: 40px;
+  text-align: left;
 }
-.startStremio {
-	background-color: #1e8dd5;
+#headerSide {
+  display: inline-block;
+  float: right;
+  margin-top: 31px;
+}
+.spacer {
+  height: 50px;
+}
+.headerButton {
 	margin-left: 457px;
 }
 .content {
-	margin-top: 50px;
-	margin-bottom: 50px;
 	text-align: left;
+}
+.searchContent {
+  display: none;
+}
+#searchResults {
+  margin-top: 40px;
 }
 .desc {
 	text-align: left !important;
@@ -36,8 +48,12 @@ body {
 .addon-load {
 	margin-right: 6px;
 }
+.uninst {
+  margin-right: 18px;
+}
 #pageContent {
-	display: inline-block
+	display: inline-block;
+  width: 699px;
 }
 .backLink {
 	cursor: pointer;
@@ -72,6 +88,7 @@ body {
 .settingsFooter {
   margin-top: 10px;
   margin-bottom: 15px;
+  display: inline-block;
 }
 .settingsMainButton {
   display: block;
@@ -113,6 +130,34 @@ button.ext {
   cursor: pointer !important;
 }
 
+.copy-box {
+  color: rgba(0,0,0,0.5);
+  padding: 7px 10px;
+  border: 1px solid rgba(0,0,0,0.3);
+  display: inline-block;
+  margin-bottom: 20px;
+  cursor: pointer;
+  float: left;
+}
+
+.load-button {
+  margin-top: -1px;
+  float: right;
+}
+
+.load-title {
+  margin-bottom: 15px;
+}
+
+.copy-box:hover {
+  border: 1px solid rgba(83,109,254,0.6);
+}
+
+.qr-hold {
+  height: 280px;
+  width: 280px;
+}
+
 .no-setting .mdl-button {
   margin-top: 20px;
 }
@@ -123,6 +168,10 @@ button.ext {
 
 .mdl-snackbar__action {
   display: none !important;
+}
+
+.mdl-dialog {
+  width: 290px;
 }
 
 .mdl-expansion {
@@ -198,4 +247,25 @@ button.ext {
 }
 .mdl-expansion[open] .mdl-expansion__summary::after {
   transform: rotate(180deg);
+}
+
+.mdl-select .mdl-textfield__label {
+  top: 2px !important;
+}
+
+@media (min-width:320px) and (max-width:1025px) {
+  body {
+    zoom: 170%;
+  }
+  #pageContent {
+    width: 100%;
+  }
+  #header {
+    padding: 30px;
+  }
+  #headerSide {
+    display: inline-block;
+    float: right;
+    margin-top: 24px;
+  }
 }

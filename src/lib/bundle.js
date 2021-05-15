@@ -1,13 +1,15 @@
 const webpack = require('webpack')
-const nodeExternals = require('webpack-node-externals')
+const path = require('path')
 
-module.exports = (name, entry, dest, excluded) => {
+require('source-map-support').install({ environment: 'node', hookRequire: true, handleUncaughtExceptions: true })
+
+module.exports = (name, entry, dest, excluded, isVerbose) => {
+	entry = path.resolve(dest, entry || './index.js')
 	return new Promise((resolve, reject) => {
-		webpack({
+		const opts = {
 		  entry,
 		  target: 'node',
 		  externals: [
-		  	nodeExternals(),
 		  	function(context, request, callback) {
 		        if (excluded.includes(request))
 		            return callback(null, "commonjs " + request)
@@ -19,8 +21,15 @@ module.exports = (name, entry, dest, excluded) => {
 		    libraryTarget: 'umd',
 		    filename: 'pms.bundle.js',
 		    path: dest
-		  }
-		}).run((err, stats) => {
+		  },
+		}
+
+		if (isVerbose) {
+			opts.output.filename = 'pms.bundle.verbose.js'
+			opts.devtool = 'inline-source-map'
+		}
+
+		webpack(opts).run((err, stats) => {
 		  if (err || stats.hasErrors()) {
 		  	if (err)
 			  	console.log(err)

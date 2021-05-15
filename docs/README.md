@@ -12,12 +12,14 @@ Key features: auto-updates itself, auto-updates add-ons, wide range of whitelist
 
 ## Difference between SDK and PimpMyStremio add-ons
 
-PimpMyStremio add-ons all need to have an `index.js` file as the entry point, are written in Node.js and `index.js` must export the `stremio-addon-sdk` router.
+PimpMyStremio add-ons all need to have an entry point, by default `./index.js` is used, you can set a different entry point by setting the `entry` property for your addon in `addonsList.json`.
 
-`index.js` example:
+All addons are written in Node.js and the entry point must export the `stremio-addon-sdk` router.
+
+Example:
 
 ```javascript
-const { addonBuilder, getInterface, getRouter } = require('stremio-addon-sdk')
+const { addonBuilder, getRouter } = require('stremio-addon-sdk')
 
 const builder = new addonBuilder(manifest)
 
@@ -33,12 +35,18 @@ builder.defineStreamHandler(args => {
   // ...
 })
 
-const addonInterface = getInterface(builder)
+builder.defineSubtitlesHandler(args => {
+  // ...
+})
 
-module.exports = getRouter(addonInterface)
+module.exports = getRouter(builder.getInterface())
 ```
 
 To better understand this code, please refer to the [stremio-addon-sdk](https://github.com/Stremio/stremio-addon-sdk/) documentation.
+
+Notes:
+- You can also export a promise to `module.exports` (for example, if you need to wait for additional data in order to reply with the add-on manifest), but for safety reasons if the exported promise fails to respond in 50 seconds, the add-on will be forcefully stopped
+- If an add-on fails to respond to a request (catalog, meta, streams, subtitles) within 120 seconds since the request was started, the add-on will be forcefully closed
 
 ## Testing add-ons
 
@@ -55,8 +63,6 @@ To sideload add-ons, you will need to create a new directory at one of these pat
 After creating a new directory, add `index.js` (described above) and `config.json` (described below) to it.
 
 Now when you start PimpMyStremio, your local add-on will be automatically loaded and available in the "Sideloaded" section.
-
-If the errors of your add-on are not visible (this usually only happens for type errors), then you can set the `PMS_UNSAFE` environment variable to any value to load your add-on directly in PimpMyStremio instead of sandboxing it.
 
 ## User settings
 
@@ -82,14 +88,21 @@ Your add-on can specify that it supports (or requires) user settings, to do so, 
     "type": "string",
     "default": "",
     "required": true
+  },
+  "style": {
+    "title": "Display Style",
+    "type": "select",
+    "options": ["Catalog", "Filters", "Channel"],
+    "default": "Channel"
   }
 }
 ```
 
 - `required` is optional and defaults to `false`
-- `type` can be "string", "number" or "boolean"
+- `type` can be "string", "number", "boolean" or "select"
 - `default` represents the default value
 - `title` is a string that will serve as the human-readable title for the users
+- `options` is an array of strings, only used for "select" type
 
 And the property name is what you will get back in the `config` option with the user set (or default) value
 
@@ -113,11 +126,13 @@ console.log(persist.getItem('myVar'))
 persist.setItem('myVar', 'hello world')
 ```
 
-Also supports `.clear()` for clearing the entirety of the data.
+Also supports `.removeItem()` to remove a key and `.clear()` for clearing the entirety of the data.
 
 ## Publishing an add-on
 
 To publish your add-on, make a PR to this repository adding it to the [addonsList.json](https://github.com/sungshon/PimpMyStremio/blob/master/src/addonsList.json) file.
+
+Note that the default entry point for an addon is `./index.js`, you can set a different entry point by setting the `entry` property to a relative path for your addon in `addonsList.json`.
 
 ## Updating an add-on
 

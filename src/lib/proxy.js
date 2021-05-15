@@ -1,7 +1,12 @@
 
 const httpProxy = require('http-proxy')
 const httpsAgent = require('https').globalAgent
+const needle = require('needle')
+const subsrt = require('subsrt')
+const encoding = require("encoding")
+const jschardet = require("jschardet")
 const pUrl = require('url')
+const events = require('./events')
 
 const defaultAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/610.0.3239.132 Safari/537.36'
 
@@ -22,6 +27,7 @@ const proxify = {
 
 	setEndpoint: url => {
 		endpoint = url
+		events.emit('set-endpoint-children', endpoint)
 	},
 
 	getEndpoint: () => {
@@ -29,11 +35,18 @@ const proxify = {
 	},
 
 	addProxy: (url, opts) => {
+
 		const urlParser = pUrl.parse(url)
 
 		const host = urlParser.host
 
 		const result = endpoint + '/video-proxy/' + urlParser.host + (urlParser.path || '')
+
+		if (process.send) {
+			// is child
+			process.send({ proxy: true, url, opts })
+			return result
+		}
 
 		const path = urlParser.path
 
@@ -63,7 +76,7 @@ const proxify = {
 
 	createProxyServer: router => {
 
-		const proxy = httpProxy.createProxyServer()
+		const proxy = httpProxy.createProxyServer({ secure: false, followRedirects: true })
 
 		proxy.on('error', e => {
 			if (e) {
@@ -72,8 +85,11 @@ const proxify = {
 			}
 		})
 
-		router.all('/video-proxy/*', (req, res) => {
+		proxy.on('proxyRes', (proxyRes, request, response) => {
+			proxyRes.headers['Access-Control-Allow-Origin'] = '*'
+		})
 
+		router.all('/video-proxy/*', (req, res) => {
 			var parts = req.url.split('/')
 
 			var host = parts[2]
@@ -83,9 +99,11 @@ const proxify = {
 			req.url = '/'+parts.join('/')
 
 			let configProxy = {}
+			let opts = {}
+			let config = {}
 
 			if (proxies[host]) {
-				const config = proxies[host]
+				config = proxies[host]
 
 				configProxy = { target: config.protocol+'//'+config.host }
 
@@ -97,7 +115,7 @@ const proxify = {
 				req.headers['host'] = configProxy.headers.host
 				req.headers['user-agent'] = configProxy.headers.agent
 
-				const opts = config.paths[req.url] || config.paths[getDirPath(req.url)] || config.opts || {}
+				opts = config.paths[req.url] || config.paths[getDirPath(req.url)] || config.opts || {}
 
 				if (opts.headers)
 					for (let key in opts.headers)
@@ -107,10 +125,70 @@ const proxify = {
 					configProxy.agent = httpsAgent
 
 				res.setHeader('Access-Control-Allow-Origin', '*')
-
 			}
-
-			proxy.web(req, res, configProxy)
+			if (!configProxy.target) {
+				res.writeHead(500)
+				res.end(JSON.stringify({ err: 'handler error' }))
+			} else {
+				if (opts.playlist || opts.subtitle) {
+					needle.get(config.protocol + '//' + config.host + req.url, { follow_max: 5, headers: opts.headers || req.headers }, (err, resp, body) => {
+						if (!err && body) {
+							body = Buffer.isBuffer(body) ? body.toString() : body
+							if (opts.playlist) {
+								const newPlaylist = []
+								let newOpts = JSON.parse(JSON.stringify(opts))
+								delete newOpts.playlist
+								body.split(/\r?\n/).forEach(line => {
+									if (line.startsWith('http://') || line.startsWith('https://')) {
+										if (newOpts.noFollowSegment)
+											newPlaylist.push(line)
+										else
+											newPlaylist.push(proxify.addProxy(line, newOpts))
+									} else if (line.match(/URI="([^"]+)/)) {
+										const nUrl = line.match(/URI="([^"]+)/)
+										let oldUrl
+										if ((nUrl || []).length > 1) oldUrl = nUrl[1]
+										let newUrl = oldUrl
+										if (newUrl.startsWith('/'))
+											newUrl = proxies[host].protocol + '//' + proxies[host].host + newUrl
+										else if (!newUrl.startsWith('http'))
+											newUrl = proxies[host].protocol + '//' + proxies[host].host + '/' + newUrl
+										newPlaylist.push(oldUrl ? line.replace(oldUrl, proxify.addProxy(newUrl, newOpts)) : line)
+									} else
+										newPlaylist.push(line)
+								})
+								res.end(newPlaylist.join('\n'))
+							} else if (opts.subtitle) {
+								let newSub = body
+								if (opts.subtitle.convert)
+									try {
+										newSub = subsrt.convert(newSub, { format: 'srt' })
+									} catch(e) {
+										console.log('convert subtitle to srt error:')
+										console.error(e)
+									}
+								if (opts.subtitle.encodeUtf8) {
+									if (!opts.subtitle.encoding || typeof opts.subtitle.encoding !== 'string') {
+										opts.subtitle.encoding = (jschardet.detect(newSub) || {}).encoding
+										console.log('guessed encoding for subtitle: ' + opts.subtitle.encoding)
+									}
+									newSub = encoding.convert(newSub, 'UTF-8', opts.subtitle.encoding)
+								}
+								res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+								res.end(newSub)
+							}
+						} else {
+							console.log('Error while requesting: ' + req.url)
+							if (err)
+								console.error(err)
+							res.writeHead(500)
+							res.end(JSON.stringify({ err: 'handler error' }))
+						}
+					})
+				} else {
+					proxy.web(req, res, configProxy)
+				}
+			}
 
 		})
 

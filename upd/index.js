@@ -1,7 +1,8 @@
 
 const github = 'sungshon/PimpMyStremio-updates'
 
-var isWin = process.platform === 'win32'
+const isWin = process.platform === 'win32'
+const isLinux = process.platform === 'linux'
 
 function ext() { return (isWin ? '.exe' : '') }
 
@@ -12,22 +13,97 @@ const fs = require('fs')
 const rimraf = require('rimraf')
 const spawn = require('child_process').spawn
 
+function msg(str) {
+	console.log('PimpMyStremio - ' + str)
+	if (api)
+		api.msg(str)
+}
+
+const configDir = require('../src/lib/dirs/configDir')()
+
 function getBinDir() {
-	const rootDir = process.env.APPDATA || (process.platform == 'darwin' ? process.env.HOME + '/Library/Preferences' : process.env.HOME + '/.local/share')
+	return path.join(configDir, 'assets')
+}
 
-	const configDir = path.join(rootDir, 'PimpMyStremio')
+function getAddonsListPath() {
+	return path.join(configDir, 'addonsList.json')	
+}
 
-	if (!fs.existsSync(configDir))
-		fs.mkdirSync(configDir)
+function getRemoteAddonsUrl() {
+	const configFilePath = path.join(configDir, 'PimpMyStremio-userConfig.json')
+	if (fs.existsSync(configFilePath)) {
+		let config
 
-	const binDir = path.join(configDir, 'assets')
+		try {
+			config = JSON.parse(fs.readFileSync(configFilePath).toString())
+		} catch(e) {
+			// ignore read file issues
+			return false
+		}
 
-	return binDir
+		return (((config || {}).userDefined || {}).addonsListUrl || {}).value
+	} else
+		return false
+}
+
+function versionToInt(str) {
+	return parseInt(str.replace('v', '').split('.').join(''))
+}
+
+function updateAddonsList() {
+	return new Promise((resolve, reject) => {
+		// default url:
+		let listUrl = 'https://raw.githubusercontent.com/sungshon/PimpMyStremio/master/src/addonsList.json'
+
+		const addonsListUrl = getRemoteAddonsUrl()
+
+		if (addonsListUrl) {
+			// test user defined url for sanity
+			const isUrl = /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi
+			if (isUrl.test(addonsListUrl)) {
+				msg('User defined add-ons list URL is valid, updating add-ons list')
+				listUrl = addonsListUrl
+			} else
+				msg('User defined add-ons list URL is invalid, using default URL')
+		}
+
+		needle.get(listUrl, (err, resp, body) => {
+			try {
+				body = JSON.parse(body)
+			} catch(e) {}
+			if (body && Array.isArray(body) && body.length) {
+				let version = getVersion(binDir)
+				version = version ? versionToInt(version) : 1
+
+				const addons = body.filter(addon => {
+					// filter out add-ons that are not currently supported by this version
+					return !!(!addon.requires || versionToInt(addon.requires) <= version)
+				})
+
+				if (addons.length) {
+					try {
+						fs.writeFileSync(getAddonsListPath(), JSON.stringify(addons))
+						msg('Successfully updated add-ons list from remote source')
+					} catch(e) {
+						msg('Warning: Could not write data from remote add-ons list to disk')
+					}
+				} else {
+					msg('Warning: Remote add-ons list seems empty')
+				}
+
+			} else {
+				msg('Warning: Invalid response from the remote add-ons list')
+			}
+			resolve()
+		})
+	})
 }
 
 function getVersion(binDir) {
 	const versionFile = path.join(binDir, '..', 'version')
-	return !fs.existsSync(versionFile) ? false : fs.readFileSync(versionFile)
+	let version = !fs.existsSync(versionFile) ? false : fs.readFileSync(versionFile)
+	version = version && Buffer.isBuffer(version) ? version.toString() : false
+	return version
 }
 
 function saveVersion(binDir, version) {
@@ -38,13 +114,13 @@ function saveVersion(binDir, version) {
 
 function installed(binDir) {
 
-	const requiredBins = ['engine' + ext(), 'phantom', 'web', 'youtube-dl']
+	const requiredBins = ['engine' + ext(), 'phantom', 'web', 'youtube-dl', 'forked-systray']
 
 	let isOk = true
 
 	requiredBins.some(file => {
 		if (!fs.existsSync(path.join(binDir, file))) {
-			console.log('Cannot start PimpMyStremio')
+			msg('Could not start engine')
 			console.error('Missing required library: ' + file)
 			isOk = false
 			return true
@@ -88,48 +164,61 @@ function installEngine(binDir, githubData) {
 	return new Promise((resolve, reject) => {
 		const dest = binDir
 
-		function installAddon() {
-			console.log('PimpMyStremio - Downloading new version')
-			needle('get', githubData.zipBall, { follow_max: 5 })
-			.then(zipFile => {
-				const tmpFile = path.join(os.tmpdir(), 'PimpMyStremio.zip')
+		function installUpdate() {
+			msg('Downloading new version')
 
-				if (fs.existsSync(tmpFile))
-					fs.unlinkSync(tmpFile)
+			const tmpFile = path.join(os.tmpdir(), 'PimpMyStremio.zip')
 
-				fs.writeFileSync(tmpFile, zipFile.body)
+			if (fs.existsSync(tmpFile))
+				fs.unlinkSync(tmpFile)
 
-				console.log('PimpMyStremio - Finished downloading new version')
+			const file = fs.createWriteStream(tmpFile);
+
+			const req = needle.get(githubData.zipBall, { follow_max: 5 })
+
+			req.pipe(file).on('finish', err => {
+				if (err) {
+					msg('Download error: ' + (err.message || 'Unknown error'))
+					console.error(err)
+					reject()
+					return
+				}
+
+				msg('Finished downloading new version')
 
 				var extract = require('extract-zip')
 
-				console.log('PimpMyStremio - Unpacking new version')
-				extract(tmpFile, { dir: path.join(binDir, '..') }, function (err) {
+				msg('Unpacking new version')
+
+				let extracted = 0
+
+				extract(tmpFile, {
+					dir: path.join(binDir, '..'),
+					onEntry: unzipProgress()
+				}, function (err) {
 					fs.unlinkSync(tmpFile)
 					if (err) {
-						console.log('Unzip error:')
+						msg('Unzip error: ' + (err.message || 'Unknown error'))
 						console.error(err)
 						reject()
 						return
 					} else {
-						console.log('PimpMyStremio - Finished unpacking new version')
+						msg('Finished unpacking new version')
 						saveVersion(binDir, githubData.tag)
 					}
-					console.log('Updated PimpMyStremio to ' + githubData.tag)
+					msg('Updated to ' + githubData.tag)
 					resolve()
 				})
 			})
-			.catch(err => {
-				console.log('Unzip error:')
-				console.error(err)
-				reject()
-			})
+
+			downloadProgress(req)
+
 		}
 
 		function cleanDir(dest, cb) {
 			fs.stat(dest, err => {
 				if (!err) {
-					console.log('PimpMyStremio - Removing old version')
+					msg('Removing old version')
 					rimraf(dest, () => {
 						cb()
 					})
@@ -138,45 +227,99 @@ function installEngine(binDir, githubData) {
 			})
 		}
 
-		cleanDir(dest, installAddon)
+		cleanDir(dest, installUpdate)
 	})
 }
 
-function startEngine(binDir) {
-	const newEnv = JSON.parse(JSON.stringify(process.env))
+const clArgs = process.argv || []
 
-	newEnv['PMS_UPDATE'] = process.execPath
+const opts = {
+	atStartup: clArgs.some(el => !!(el == '--startup')),
+	noChildren: clArgs.some(el => !!(el == '--no-children')),
+	isVerbose: clArgs.some(el => !!(el == '--verbose')),
+	linuxTray: clArgs.some(el => !!(el == '--linux-tray')),
+	shouldUninstall: clArgs.some(el => !!(el == '--uninstall')),
+}
 
-	const atStartup = (process.argv || []).some(el => !!(el == '--startup'))
+if (opts.linuxTray) // users can choose to force system tray, if they installed the deps manually
+	opts.isVerbose = false
+else if (isLinux) // on linux we default to verbose, as system tray it requires dependencies
+	opts.isVerbose = true
 
-	if (atStartup)
-		newEnv['PMS_STARTUP'] = '1'
+clArgs.some(el => {
+	if (el.startsWith('--sideload=')) {
+		opts.sideloadDir = el.replace('--sideload=', '')
+		return true
+	}
+})
 
-	const addonProc = spawn(path.join(binDir, 'engine' + ext()), [],
-		{
-			cwd: binDir,
-			env: newEnv
+clArgs.some(el => {
+	if (el.startsWith('--lan-ip=')) {
+		opts.lanIp = el.replace('--lan-ip=', '').replace(/[^0-9.]/g, '')
+		return true
+	}
+})
+
+async function startEngine(binDir) {
+
+	await updateAddonsList()
+
+	api.close()
+
+	const env = Object.create(process.env)
+
+	env['PMS_UPDATE'] = process.execPath
+
+	if (opts.atStartup)
+		env['PMS_STARTUP'] = '1'
+
+	if (opts.noChildren)
+		env['NO_CHILDREN'] = '1'
+
+	if (opts.linuxTray)
+		env['LINUX_TRAY'] = '1'
+
+	if (opts.isVerbose)
+		env['PMS_VERBOSE'] = '1'
+	
+	if (opts.sideloadDir)
+		env['PMS_SIDELOAD'] = opts.sideloadDir
+	
+	if (opts.lanIp)
+		env['PMS_LAN_IP'] = opts.lanIp
+
+	const procOpts = { cwd: binDir, env }
+
+	if (!opts.isVerbose) {
+		procOpts.detached = true
+		procOpts.stdio = 'ignore'
+	}
+
+	if (isWin)
+		procOpts.windowsHide = true
+
+	const addonProc = spawn(path.join(binDir, 'engine' + ext()), [], procOpts)
+
+	if (opts.isVerbose) {
+		addonProc.stdout.on('data', data => {
+			if (data)
+				console.log(data.toString().trim())
 		})
 
-	addonProc.stdout.on('data', data => {
-		if (data) {
-			console.log(data.toString().trim())
-//			var sData = String(data).replace(/(\r\n\t|\n|\r\t)/gm,'')
-		}
+		addonProc.stderr.on('data', data => {
+			if (data)
+				console.log(data.toString().trim())
+		})
 
-	})
-
-	addonProc.stderr.on('data', data => {
-		if (data) {
-			console.log(data.toString().trim())
-//			var sData = String(data).replace(/(\r\n\t|\n|\r\t)/gm,'')
-		}
-	})
-
-	addonProc.on('exit', code => {
-		console.log('Process exit, code: ' + code)
+		addonProc.on('exit', code => {
+			console.log('Process exit, code: ' + code)
+			process.exit()
+		})
+	} else {
+		msg('Starting engine, closing updater')
+		addonProc.unref()
 		process.exit()
-	})
+	}
 
 }
 
@@ -192,21 +335,49 @@ function afterInstall() {
 	}
 }
 
-console.log('PimpMyStremio - Checking for updates')
+const downloadProgress = require('./downloadProgress')
 
-zipBall().then(githubData => {
+const unzipProgress = require('./unzipProgress')
 
-	const version = getVersion(binDir)
+let api
 
-	if (!version || version != githubData.tag) {
-		console.log('PimpMyStremio - New version found')
-		installEngine(binDir, githubData).then(afterInstall).catch(afterInstall)
-	} else {
-		console.log('PimpMyStremio - Already running latest version')
-		startEngine(binDir)
-	}
+if (!opts.shouldUninstall) {
 
-}).catch(err => {
-	console.error(err)
-	afterInstall()
-})
+	api = require('./api')
+
+	msg('Checking for updates')
+
+	zipBall().then(githubData => {
+
+		const version = getVersion(binDir)
+
+		if (!version || version != githubData.tag) {
+			api.start()
+			msg('New version found')
+			installEngine(binDir, githubData).then(afterInstall).catch(afterInstall)
+		} else {
+			msg('Already have latest version')
+			startEngine(binDir)
+		}
+
+	}).catch(err => {
+		console.error(err)
+		afterInstall()
+	})
+
+} else {
+
+	// uninstall PimpMyStremio
+
+	msg('Uninstalling PimpMyStremio')
+
+	rimraf(configDir, { maxBusyTries: 100 }, err => {
+		if (err) {
+			console.error(err)
+			process.exit()
+			return
+		}
+		msg('Successfully uninstalled PimpMyStremio')
+		process.exit()
+	})
+}

@@ -3,8 +3,8 @@ const addon = require('./addon')
 const fs = require('fs')
 const path = require('path')
 
-const isDirectory = source => fs.lstatSync(source).isDirectory()
-const getDirectories = source => fs.readdirSync(source).map(name => path.join(source, name)).filter(isDirectory)
+const isDirectoryOrSymLink = source => fs.lstatSync(source).isDirectory() || fs.lstatSync(source).isSymbolicLink()
+const getDirectories = source => fs.readdirSync(source).map(name => path.join(source, name)).filter(isDirectoryOrSymLink)
 
 function validAddons() {
 	return new Promise((resolve, reject) => {
@@ -29,6 +29,26 @@ function validAddons() {
 }
 
 module.exports = {
+	getManifest: name => {
+		return new Promise((resolve, reject) => {
+			validAddons().then(manifests => {
+				if (manifests.length) {
+					let manifest
+					manifests.some(el => {
+						if (el.repo.endsWith('/' + name)) {
+							manifest = el
+							return true
+						}
+					})
+					if (manifest)
+						resolve(manifest)
+					else
+						reject(new Error('Could not find manifest for: ' + name))
+				} else
+					reject(new Error('Could not get manifest for: ' + name))
+			})
+		})
+	},
 	loadAll: cb => {
 		return new Promise((resolve, reject) => {
 			validAddons().then(manifests => {

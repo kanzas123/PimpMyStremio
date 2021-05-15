@@ -16,15 +16,11 @@ const defaultConfig = {
 			type: 'boolean',
 			default: false
 		},
-		remote: {
-			title: 'Access remotely',
-			type: 'boolean',
-			default: false
-		},
-		subdomain: {
-			title: 'Remote access subdomain',
-			type: 'string',
-			default: nanoid()
+		theme: {
+			title: 'Theme',
+			type: 'select',
+			options: ["Light", "Dark", "Rusty", "Sky", "Light Orange", "Light Blue", "Light Green", "Dark Purple", "Dark Blue", "Dark Green"],
+			default: "Light"
 		},
 		serverPort: {
 			title: 'Server port',
@@ -32,21 +28,52 @@ const defaultConfig = {
 			default: 7777
 		},
 		password: {
-			title: 'Password',
+			title: 'Server Password',
 			type: 'string',
 			default: ''
-		}
+		},
+		addonsListUrl: {
+			title: 'Remote Add-ons List URL',
+			type: 'string',
+			default: 'https://raw.githubusercontent.com/sungshon/PimpMyStremio/master/src/addonsList.json'
+		},
+		externalUse: {
+			title: "Remote Access",
+			type: "select",
+			options: ["No (local)", "LAN", "External"],
+			default: "No (local)"
+		},
 	}
 }
 
 let password = ''
 
+// fixes settings if new properties were added / removed
+function fixSettings(config) {
+	for (let key in defaultConfig.userDefined)
+		if (typeof config.userDefined[key] === 'undefined')
+			config.userDefined[key] = defaultConfig.userDefined[key]
+
+	for (let key in config.userDefined)
+		if (typeof defaultConfig.userDefined[key] === 'undefined')
+			delete config.userDefined[key]
+
+	for (let key in config.userDefined)
+		if (config.userDefined[key].options
+			&& JSON.stringify(config.userDefined[key].options) != JSON.stringify(defaultConfig.userDefined[key].options))
+			config.userDefined[key].options = defaultConfig.userDefined[key].options
+
+	return config
+}
+
 const configDb = {
 	compress: data => {
 		const obj = {}
 		const userDefined = {}
-		for (let key in data.userDefined)
-			userDefined[key] = data.userDefined[key].value || data.userDefined[key].default
+
+		for (let key in defaultConfig.userDefined)
+			userDefined[key] = (data.userDefined[key] || {}).value || defaultConfig.userDefined[key].default
+
 		return {
 			installedAddons: data.installedAddons,
 			runningAddons: data.runningAddons,
@@ -68,12 +95,15 @@ const configDb = {
 			let config
 
 			try {
-				config = fs.readFileSync(configFilePath)
+				config = JSON.parse(fs.readFileSync(configFilePath).toString())
 			} catch(e) {
 				// ignore read file issues
 				return defaultConfig
 			}
-			return JSON.parse(config.toString())
+
+			config = fixSettings(config)
+
+			return config
 		} else
 			return defaultConfig
 	},
@@ -93,6 +123,8 @@ const configDb = {
 				// ignore read file issues
 				return configDb.compress(defaultConfig)
 			}
+
+			config = fixSettings(config)
 
 			const compressed = configDb.compress(config)
 			if (!password && compressed.userDefined.password)
